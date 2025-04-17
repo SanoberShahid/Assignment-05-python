@@ -1,7 +1,9 @@
+
 import streamlit as st
 import hashlib
 import json
 import os
+import time
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
@@ -9,7 +11,11 @@ from cryptography.hazmat.backends import default_backend
 from base64 import urlsafe_b64encode
 from datetime import datetime
 
+# -----------------------------
+# 📁 JSON File Handling
+# -----------------------------
 DATA_FILE = "data.json"
+LOCK_FILE = "lock.json"
 USERS_FILE = "users.json"
 
 def load_data():
@@ -22,6 +28,16 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
+def load_locks():
+    if os.path.exists(LOCK_FILE):
+        with open(LOCK_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_locks(locks):
+    with open(LOCK_FILE, "w") as f:
+        json.dump(locks, f, indent=4)
+
 def load_users():
     if os.path.exists(USERS_FILE):
         with open(USERS_FILE, "r") as f:
@@ -32,6 +48,9 @@ def save_users(users):
     with open(USERS_FILE, "w") as f:
         json.dump(users, f, indent=4)
 
+# -----------------------------
+# 🔐 Key and Cipher Setup
+# -----------------------------
 def generate_cipher(passkey):
     salt = b'streamlit-salt'
     kdf = PBKDF2HMAC(
@@ -44,11 +63,17 @@ def generate_cipher(passkey):
     key = urlsafe_b64encode(kdf.derive(passkey.encode()))
     return Fernet(key)
 
+# -----------------------------
+# 📆 Load Data into Session State
+# -----------------------------
 stored_data = load_data()
+locks = load_locks()
 users_data = load_users()
 
 if "stored_data" not in st.session_state:
     st.session_state.stored_data = stored_data
+if "locks" not in st.session_state:
+    st.session_state.locks = locks
 if "is_logged_in" not in st.session_state:
     st.session_state.is_logged_in = False
 if "current_user" not in st.session_state:
@@ -56,6 +81,9 @@ if "current_user" not in st.session_state:
 if "page" not in st.session_state:
     st.session_state.page = "Login"
 
+# -----------------------------
+# 🔑 Utility Functions
+# -----------------------------
 def hash_passkey(passkey):
     return hashlib.sha256(passkey.encode()).hexdigest()
 
@@ -70,6 +98,9 @@ def decrypt_data(encrypted_text, passkey):
     except:
         return None
 
+# -----------------------------
+# 🔐 Auth System
+# -----------------------------
 st.set_page_config(page_title="Secure Data Vault", page_icon="🛡️", initial_sidebar_state="collapsed")
 st.title("🛡️Secure Data Encryption System")
 st.caption("Developed by Sanober Shahid")
@@ -80,50 +111,59 @@ if not st.session_state.is_logged_in:
     if auth_tab == "Login":
         st.subheader("🔐 Login to Your Vault")
         user_login = st.text_input("👤 Username")
+        pass_login = st.text_input("🔑 Password", type="password")
 
         if st.button("🔓 Login"):
-            if user_login in users_data:
+            hashed_input = hash_passkey(pass_login)
+            if users_data.get(user_login) == hashed_input:
                 st.session_state.is_logged_in = True
                 st.session_state.current_user = user_login
                 st.success(f"✅ Welcome, {user_login}!")
+                time.sleep(2)
                 st.session_state.page = "home"
                 st.rerun()
             else:
-                st.error("❌ Incorrect username.")
+                st.error("❌ Incorrect username or password.")
 
     elif auth_tab == "Register":
         st.subheader("💊 Create New Account")
         new_user = st.text_input("👤 Username")
+        new_pass = st.text_input("🔑 Password", type="password")
 
         if st.button("📝 Register"):
             if new_user in users_data:
                 st.error("❌ Username already exists.")
-            elif new_user:
-                users_data[new_user] = "default"
+            elif new_user and new_pass:
+                users_data[new_user] = hash_passkey(new_pass)
                 save_users(users_data)
                 st.success("✅ Registered successfully! You can now login.")
                 st.session_state.page = "home"
                 st.rerun()
             else:
-                st.warning("⚠️ Please enter a username.")
+                st.warning("⚠️ Please enter both username and password.")
     st.stop()
 
+# -----------------------------
+# 🧱 Main Navigation (Updated)
+# -----------------------------
 menu = ["Home", "Store Data", "Retrieve Data"]
 choice = st.sidebar.selectbox("Navigate", menu)
 
 if choice == "Home":
+    st.session_state.page = "home"
     st.subheader("🏠 Welcome to Your Secure Vault")
     st.markdown("Use the sidebar to store or retrieve your encrypted data.")
 
 elif choice == "Store Data":
+    st.session_state.page = "Store Data"
     st.subheader("📂 Store Encrypted Data")
     username = st.session_state.current_user
     title = st.text_input("🗂️ Title for Your Secret")
     user_data = st.text_area("📝 Enter Secret Data:")
-    passkey = "passkey"  # Dummy passkey used to encrypt/decrypt
+    passkey = st.text_input("🔑 Create Passkey:", type="password")
 
     if st.button("🔐 Encrypt & Save"):
-        if user_data and title:
+        if user_data and passkey and title:
             encrypted = encrypt_data(user_data, passkey)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             if username not in st.session_state.stored_data:
@@ -142,13 +182,14 @@ elif choice == "Store Data":
             st.error("⚠️ All fields are required!")
 
 elif choice == "Retrieve Data":
+    st.session_state.page = "Retrieve Data"
     st.subheader("🔍 Retrieve Your Data")
     username = st.session_state.current_user
     user_entries = st.session_state.stored_data.get(username, {})
 
     if user_entries:
         selected_title = st.selectbox("📁 Select a Title to Decrypt", list(user_entries.keys()))
-        passkey_input = "passkey"  # Fixed dummy passkey
+        passkey_input = st.text_input("🔑 Enter Passkey:", type="password")
 
         if st.button("🤩 Decrypt"):
             entry = user_entries.get(selected_title)
@@ -158,8 +199,11 @@ elif choice == "Retrieve Data":
                     st.success("✅ Decrypted Data:")
                     st.code(decrypted, language="text")
                 else:
-                    st.error("❌ Failed to decrypt.")
+                    st.error("❌ Failed to decrypt. Try again.")
             else:
                 st.error("❌ Incorrect passkey.")
     else:
         st.info("ℹ️ You have no saved data yet.")
+
+
+
